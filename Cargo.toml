@@ -1,0 +1,15 @@
+[package]
+name = "smartcore-example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.0"
+smartcore = { version = "0.3.2", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+polars = "*"
+serde_json = "1.0"
+rmp-serde = "1.1.2"
+actix-multipart = "0.6"
+futures-util = "0.3"
+actix-cors = "0.6.0"

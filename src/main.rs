@@ -174,7 +174,7 @@ struct EvmRequest {
     function_args: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct BondingCurveInfo {
     address: String,
     name: String,
@@ -238,15 +238,52 @@ async fn train_linear_regression() -> HttpResponse {
 }
 
 async fn get_datasets() -> HttpResponse {
-    match fs::read_to_string("src/datasets.json") {
+    // Read datasets.json
+    let datasets_result = match fs::read_to_string("src/datasets.json") {
         Ok(json_str) => {
             match serde_json::from_str::<Datasets>(&json_str) {
-                Ok(datasets) => HttpResponse::Ok().json(datasets),
-                Err(_) => HttpResponse::InternalServerError().finish()
+                Ok(datasets) => datasets,
+                Err(_) => return HttpResponse::InternalServerError().body("Failed to parse datasets.json")
             }
         },
-        Err(_) => HttpResponse::InternalServerError().finish()
+        Err(_) => return HttpResponse::InternalServerError().body("Failed to read datasets.json")
+    };
+    
+    // Read bonding_curves.json
+    let bonding_curves = match fs::read_to_string("src/bonding_curves.json") {
+        Ok(json_str) => {
+            match serde_json::from_str::<BondingCurves>(&json_str) {
+                Ok(curves) => curves,
+                Err(_) => BondingCurves::default() // Use empty curves if parsing fails
+            }
+        },
+        Err(_) => BondingCurves::default() // Use empty curves if file can't be read
+    };
+    
+    // Create a new response structure that includes bonding curve info
+    #[derive(Serialize)]
+    struct DatasetWithCurve {
+        #[serde(flatten)]
+        dataset: Dataset,
+        bonding_curve: Option<BondingCurveInfo>,
     }
+    
+    #[derive(Serialize)]
+    struct DatasetsResponse {
+        datasets: Vec<DatasetWithCurve>,
+    }
+    
+    // Combine dataset info with bonding curve info
+    let datasets_with_curves = datasets_result.datasets.into_iter().map(|dataset| {
+        let bonding_curve = bonding_curves.curves.get(&dataset.title).cloned();
+        println!("We're returning {:?}", bonding_curve);
+        DatasetWithCurve {
+            dataset,
+            bonding_curve,
+        }
+    }).collect();
+    
+    HttpResponse::Ok().json(DatasetsResponse { datasets: datasets_with_curves })
 }
 
 async fn add_dataset(mut payload: Multipart) -> HttpResponse {
@@ -538,7 +575,8 @@ async fn main() -> std::io::Result<()> {
             .route("/train/dt", web::post().to(train_decision_tree))
             .route("/train/rf", web::post().to(train_random_forest))
             .route("/train/lr", web::post().to(train_linear_regression))
-            // .route("/bonding-curve/create", web::post().to(create_bonding_curve))
+            .route("/bonding-curve/create", web::post().to(create_bonding_curve))
+            
     })
     .bind(("127.0.0.1", 8080))?
     .run()

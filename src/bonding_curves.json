@@ -1,9 +1,9 @@
 {
   "curves": {
     "Iris Dataset": {
-      "address": "0xaa7392b72d44bc475f42b8cce3b6a628a209d8c0",
+      "address": "0x13c44aa3377246f05546f9e3b0104792f944d81b",
       "name": "Iris Dataset Token",
-      "symbol": "IRI652",
+      "symbol": "IRIed5",
       "chain_id": 1315
     }
   }

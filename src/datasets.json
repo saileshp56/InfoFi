@@ -34,7 +34,7 @@
       "price": "0.005"
     },
     {
-      "title": "Iris Flower Dataset",
+      "title": "Iris Dataset",
       "description": "150 samples of iris flowers with 4 features for species classification",
       "size": "0.2MB",
       "format": "CSV",

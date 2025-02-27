@@ -14,3 +14,8 @@ actix-multipart = "0.6"
 futures-util = "0.3"
 actix-cors = "0.6.0"
 risc0-zkvm = { version = "0.19" }
+ethers = { version = "2.0", features = ["ws", "rustls"] }
+tokio = { version = "1", features = ["full"] }
+lazy_static = "1.4.0"
+rand = "0.8.5"
+dotenv = "0.15.0"

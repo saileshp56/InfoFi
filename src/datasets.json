@@ -9,7 +9,7 @@
         "Computer Vision",
         "Classification"
       ],
-      "price": "0.01"
+      "chain_id": null
     },
     {
       "title": "IMDb Movie Reviews",
@@ -20,7 +20,7 @@
         "NLP",
         "Sentiment Analysis"
       ],
-      "price": "0.015"
+      "chain_id": null
     },
     {
       "title": "Boston Housing",
@@ -31,7 +31,7 @@
         "Regression",
         "Real Estate"
       ],
-      "price": "0.005"
+      "chain_id": null
     },
     {
       "title": "Iris Dataset",
@@ -42,67 +42,17 @@
         "Classification",
         "Botany"
       ],
-      "price": "0.003"
+      "chain_id": null
     },
     {
-      "title": "Ignore this",
-      "description": "8",
-      "size": "0.52MB",
-      "format": "9",
-      "categories": [
-        "3"
-      ],
-      "price": "2"
-    },
-    {
-      "title": "99",
-      "description": "3",
-      "size": "0.10MB",
-      "format": "4",
-      "categories": [
-        "5"
-      ],
-      "price": "3"
-    },
-    {
-      "title": "2",
-      "description": "1",
-      "size": "0.10MB",
-      "format": "4",
-      "categories": [
-        "5"
-      ],
-      "price": "6"
-    },
-    {
-      "title": "0dsja0-adwno",
-      "description": "34",
-      "size": "1.64MB",
-      "format": "5",
-      "categories": [
-        "521"
-      ],
-      "price": "34"
-    },
-    {
-      "title": "94jtj9-t3-",
-      "description": "j32opds",
-      "size": "0.10MB",
-      "format": "pdpon",
-      "categories": [
-        "snpos"
-      ],
-      "price": "3"
-    },
-    {
-      "title": "9e2",
-      "description": "h9pe9",
+      "title": "Wallstreet Stocks",
+      "description": "LOTS OF STUFF YEAH",
       "size": "0.00MB",
-      "format": "hh92",
+      "format": "CSV",
       "categories": [
-        "9ph"
+        "Classification"
       ],
-      "price": "3"
+      "chain_id": 1315
     }
   ]
 }

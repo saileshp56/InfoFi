@@ -1,0 +1,29 @@
+{
+    "name": "risc0-proof-verifier",
+    "version": "1.0.0",
+    "description": "Verifies RISC0 zero-knowledge proofs on-chain using zkVerifyJS",
+    "main": "verify_proof.js",
+    "scripts": {
+        "verify": "node verify_proof.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "zkp",
+        "zero-knowledge",
+        "risc0",
+        "blockchain",
+        "verification"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "@hashgraph/sdk": "^2.59.0",
+        "body-parser": "^1.20.3",
+        "dotenv": "^16.4.7",
+        "express": "^4.21.2",
+        "zkverifyjs": "^0.6.0"
+    },
+    "engines": {
+        "node": ">=14.0.0"
+    }
+}

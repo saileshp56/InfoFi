@@ -4,11 +4,14 @@ use smartcore::readers;
 use std::fs::File;
 use std::io::{Read, Write};
 use polars::prelude::*;
-use serde_json;
 use rmp_serde;
-
+use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create directories if they don't exist
+    std::fs::create_dir_all("res/ml-model")?;
+    std::fs::create_dir_all("res/input-data")?;
+
     // Load the iris dataset from CSV files
     let input = readers::csv::matrix_from_csv_source::<f64, Vec<_>, DenseMatrix<_>>(
         File::open("src/iris_input_data.csv").unwrap(),
@@ -22,8 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .i64()?.into_no_null_iter().collect::<Vec<i64>>()
                 .into_iter().map(|x| x as u32).collect::<Vec<u32>>();
 
-    // Train another model with custom parameters
-    let model_with_custom_params = DecisionTreeClassifier::fit(
+    // Train a model with custom parameters
+    let model = DecisionTreeClassifier::fit(
         &input,
         &y_u32s,
         DecisionTreeClassifierParameters {
@@ -35,19 +38,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     )?;
 
-    // Make predictions with both models
-    let custom_predictions = model_with_custom_params.predict(&input)?;
-    
-
-    println!("Custom model predictions (first 5): {:?}", &custom_predictions[..5]);
-
-    // Create directories if they don't exist
-    std::fs::create_dir_all("res/ml-model")?;
-    std::fs::create_dir_all("res/input-data")?;
+    // Make predictions
+    let predictions = model.predict(&input)?;
+    println!("Model predictions (first 5): {:?}", &predictions[..5]);
 
     // Serialize and save the model and input data
-    let model_bytes = rmp_serde::to_vec(&model_with_custom_params)?;
+    let model_bytes = rmp_serde::to_vec(&model)?;
     let data_bytes = rmp_serde::to_vec(&input)?;
+    let labels_bytes = rmp_serde::to_vec(&y_u32s)?;
 
     let mut f = File::create("res/ml-model/tree_model_bytes.bin")?;
     f.write_all(&model_bytes)?;
@@ -55,7 +53,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut f1 = File::create("res/input-data/tree_model_data_bytes.bin")?;
     f1.write_all(&data_bytes)?;
 
-    println!("Model and data saved successfully!");
+    let mut f2 = File::create("res/input-data/tree_model_labels.bin")?;
+    f2.write_all(&labels_bytes)?;
 
+    println!("Model, data, and labels saved successfully!");
     Ok(())
 }

@@ -5,6 +5,12 @@
       "name": "Iris Dataset Token",
       "symbol": "IRIed5",
       "chain_id": 1315
+    },
+    "Wallstreet Stocks": {
+      "address": "0xd8dd2776058e680d8fd73e4d004d838f36aada62",
+      "name": "Wallstreet Stocks Token",
+      "symbol": "WAL2c2",
+      "chain_id": 1315
     }
   }
 }

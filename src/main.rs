@@ -14,6 +14,7 @@ use std::fs;
 use actix_multipart::Multipart;
 use futures_util::TryStreamExt as _;
 use actix_cors::Cors;
+use actix_web::{web::Path};
 use actix_web::http::header;
 use ethers::{
     prelude::*,
@@ -27,6 +28,13 @@ use rand;
 use lazy_static;
 use dotenv::dotenv;
 use std::env;
+use hedera::{
+    AccountId, Client, TopicMessageSubmitTransaction, PrivateKey, TopicId, TopicCreateTransaction,
+};
+// use std::time;
+use time::Duration;
+use reqwest;
+use base64;
 
 lazy_static::lazy_static! {
     static ref PROVIDER_URLS: std::collections::HashMap<u64, String> = {
@@ -140,6 +148,9 @@ struct MLParameters {
     min_samples_leaf: u16,
     min_samples_split: u16,
     use_entropy: bool,
+    dataset_title: String,
+    accuracy: f64,
+    wallet_address: String,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +159,16 @@ struct RFParameters {
     min_samples_leaf: u16,
     min_samples_split: u16,
     n_trees: u16,
+    dataset_title: String,
+    accuracy: f64,
+    wallet_address: String,
+}
+
+#[derive(Deserialize)]
+struct LRParameters {
+    dataset_title: String,
+    accuracy: f64,
+    wallet_address: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -157,7 +178,6 @@ struct Dataset {
     size: String,
     format: String,
     categories: Vec<String>,
-    price: String,
     chain_id: Option<u64>,
 }
 
@@ -194,6 +214,7 @@ struct CreateBondingCurveRequest {
 }
 
 async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
+    // Create model parameters
     let model_params = DecisionTreeClassifierParameters {
         criterion: if params.use_entropy { 
             SplitCriterion::Entropy 
@@ -203,13 +224,341 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
         max_depth: params.max_depth,
         min_samples_leaf: params.min_samples_leaf as usize,
         min_samples_split: params.min_samples_split as usize,
-        seed: Option::None
+        seed: None,
     };
 
-    match train_dt_model(model_params) {
-        Ok(predictions) => HttpResponse::Ok().json(predictions),
-        Err(_) => HttpResponse::InternalServerError().finish()
+    // Construct dataset path
+    let dataset_path = format!("src/{}.csv", params.dataset_title);
+    
+    // Log the wallet address and accuracy
+    println!("Training decision tree for wallet: {}, desired accuracy: {}", 
+             params.wallet_address, params.accuracy);
+    
+    match train_dt_model(model_params, &dataset_path) {
+        Ok(predictions) => {
+            // Create directories if they don't exist
+            std::fs::create_dir_all("res/ml-model").unwrap_or_default();
+            std::fs::create_dir_all("res/input-data").unwrap_or_default();
+            
+            // Load the dataset again to save it
+            let input = readers::csv::matrix_from_csv_source::<f64, Vec<_>, DenseMatrix<_>>(
+                File::open(&dataset_path).unwrap(),
+                readers::csv::CSVDefinition::default()
+            ).unwrap();
+            
+            // Get the labels
+            let df = CsvReader::from_path(&dataset_path).unwrap()
+                .has_header(true)
+                .finish().unwrap();
+            
+            let columns = df.get_column_names();
+            let target_column = columns.last().unwrap();
+            
+            let y_u32s: Vec<u32> = df.column(target_column).unwrap()
+                .cast(&DataType::Int64).unwrap()
+                .i64().unwrap()
+                .into_no_null_iter()
+                .map(|x| x as u32)
+                .collect();
+            
+            // Load the model
+            let model_path = format!("src/{}_dt_model.bin", params.dataset_title);
+            let mut model_file = File::open(&model_path).unwrap();
+            let mut model_bytes = Vec::new();
+            model_file.read_to_end(&mut model_bytes).unwrap();
+            
+            // Save to res/ directory
+            let mut f = File::create("res/ml-model/tree_model_bytes.bin").unwrap();
+            f.write_all(&model_bytes).unwrap();
+            
+            let data_bytes = rmp_serde::to_vec(&input).unwrap();
+            let mut f1 = File::create("res/input-data/tree_model_data_bytes.bin").unwrap();
+            f1.write_all(&data_bytes).unwrap();
+            
+            let labels_bytes = rmp_serde::to_vec(&y_u32s).unwrap();
+            let mut f2 = File::create("res/input-data/tree_model_labels.bin").unwrap();
+            f2.write_all(&labels_bytes).unwrap();
+            
+            // Run the RISC Zero zkVM verification (now async)
+            let output = run_zkvm_verification().await;
+            
+            let model_bytes = fs::read("res/ml-model/tree_model_bytes.bin").unwrap_or_default();
+            let model_base64 = base64::encode(&model_bytes);
+            
+            // Check if verification was successful and interact with bonding curve
+            let bonding_curve_result = if output["verification_result"]["verified"].as_bool().unwrap_or(false) {
+                // Get the dataset info to find the chain_id and bonding curve address
+                let dataset_info = get_dataset_info(&params.dataset_title);
+                
+                if let Some(dataset) = dataset_info {
+                    if let Some(chain_id) = dataset.chain_id {
+                        // Get the bonding curve address for this dataset
+                        let bonding_curve_address = get_bonding_curve_address(&params.dataset_title);
+                        
+                        if let Some(address) = bonding_curve_address {
+                            // Interact with the bonding curve
+                            match interact_with_bonding_curve(address, chain_id, 100.0).await {
+                                Ok(result) => Some(result),
+                                Err(e) => Some(serde_json::json!({
+                                    "status": "error",
+                                    "message": format!("Failed to interact with bonding curve: {}", e)
+                                }))
+                            }
+                        } else {
+                            Some(serde_json::json!({
+                                "status": "error",
+                                "message": "No bonding curve found for this dataset"
+                            }))
+                        }
+                    } else {
+                        Some(serde_json::json!({
+                            "status": "error",
+                            "message": "Dataset has no chain ID configured"
+                        }))
+                    }
+                } else {
+                    Some(serde_json::json!({
+                        "status": "error",
+                        "message": "Dataset not found"
+                    }))
+                }
+            } else {
+                Some(serde_json::json!({
+                    "status": "skipped",
+                    "message": "Verification failed, skipping bonding curve interaction"
+                }))
+            };
+            
+            // Return the response with predictions and verification results
+            HttpResponse::Ok().json(serde_json::json!({
+                "predictions": predictions,
+                "accuracy_param": params.accuracy,
+                "wallet_address": params.wallet_address,
+                "verification_result": output,
+                "model": model_base64,
+                "bonding_curve_result": bonding_curve_result
+            }))
+        },
+        Err(e) => {
+            println!("Error training decision tree: {}", e);
+            HttpResponse::InternalServerError().body(format!("Error training model: {}", e))
+        }
     }
+}
+
+// Helper function to get dataset info
+fn get_dataset_info(dataset_title: &str) -> Option<Dataset> {
+    match fs::read_to_string("src/datasets.json") {
+        Ok(json_str) => {
+            match serde_json::from_str::<Datasets>(&json_str) {
+                Ok(datasets) => {
+                    datasets.datasets.into_iter()
+                        .find(|dataset| dataset.title == dataset_title)
+                },
+                Err(_) => None
+            }
+        },
+        Err(_) => None
+    }
+}
+
+// Helper function to get bonding curve address for a dataset
+fn get_bonding_curve_address(dataset_title: &str) -> Option<String> {
+    match fs::read_to_string("src/bonding_curves.json") {
+        Ok(json_str) => {
+            match serde_json::from_str::<BondingCurves>(&json_str) {
+                Ok(bonding_curves) => {
+                    bonding_curves.curves.get(dataset_title)
+                        .map(|curve_info| curve_info.address.clone())
+                },
+                Err(_) => None
+            }
+        },
+        Err(_) => None
+    }
+}
+
+// Function to interact with the bonding curve (approve and buy)
+async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token_amount: f64) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    println!("Interacting with bonding curve at {} on chain {}", curve_address, chain_id);
+    
+    // Parse the curve address
+    let curve_address_parsed = Address::from_str(&curve_address)?;
+    
+    // Convert token amount to wei (assuming 18 decimals)
+    let token_amount_wei = {
+        let wei_amount = (token_amount * 1e18) as u128;
+        U256::from(wei_amount)
+    };
+    
+    // Set up provider and client
+    let wallet = WALLET.clone();
+    
+    let provider_url = match PROVIDER_URLS.get(&chain_id) {
+        Some(url) => url,
+        None => return Err(format!("No provider URL for chain ID {}", chain_id).into())
+    };
+    
+    let provider = Provider::<Http>::try_from(provider_url.as_str())?;
+    let client = Arc::new(SignerMiddleware::new(provider, wallet.with_chain_id(chain_id)));
+    
+    // Load curve ABI
+    let curve_abi_json = std::fs::read_to_string("src/abi/curve_abi.json")?;
+    
+    // Create curve contract instance
+    let curve_abi = serde_json::from_str::<ethers::abi::Abi>(&curve_abi_json)?;
+    let curve = Contract::new(curve_address_parsed, curve_abi, client.clone());
+    
+    // STEP 1: Call calculatePaymentRequired to get the exact payment amount needed
+    let payment_required: U256 = curve.method::<_, U256>("calculatePaymentRequired", token_amount_wei)?
+        .call().await?;
+    
+    println!("Payment required: {} wei for {} tokens", payment_required, token_amount);
+    
+    // Get the payment token address for this chain
+    let payment_token_address = match PAYMENT_TOKENS.get(&chain_id) {
+        Some(addr) => *addr,
+        None => return Err(format!("No payment token configured for chain ID {}", chain_id).into())
+    };
+    
+    // Load ERC20 ABI
+    let erc20_abi_json = match std::fs::read_to_string("src/abi/erc20_abi.json") {
+        Ok(json) => json,
+        Err(_) => {
+            // Fallback to a minimal ERC20 ABI if file doesn't exist
+            r#"[{"constant":false,"inputs":[{"name":"_spender","type":"address"},{"name":"_value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"}]"#.to_string()
+        }
+    };
+    
+    // Create token contract instance
+    let erc20_abi = serde_json::from_str::<ethers::abi::Abi>(&erc20_abi_json)?;
+    let token = Contract::new(payment_token_address, erc20_abi, client.clone());
+    
+    // STEP 2: Call approve function with the exact payment amount needed
+    let approve_tx = token.method::<_, bool>("approve", (curve_address_parsed, payment_required))?;
+    
+    // Send the approve transaction
+    let approve_pending_tx = approve_tx.send().await?;
+    
+    // Wait for the approve transaction to be mined
+    let approve_receipt = match approve_pending_tx.await? {
+        Some(r) => r,
+        None => return Err("Approve transaction failed".into())
+    };
+    
+    println!("Approve transaction successful: {:?}", approve_receipt.transaction_hash);
+    
+    // STEP 3: Now call buy function with the token amount
+    let buy_tx = curve.method::<_, ()>("buy", token_amount_wei)?;
+    
+    // Send the buy transaction
+    let buy_pending_tx = buy_tx.send().await?;
+    
+    // Wait for the buy transaction to be mined
+    let buy_receipt = match buy_pending_tx.await? {
+        Some(r) => r,
+        None => return Err("Buy transaction failed".into())
+    };
+    
+    println!("Buy transaction successful: {:?}", buy_receipt.transaction_hash);
+    
+    Ok(serde_json::json!({
+        "status": "success",
+        "approve_tx": format!("{:?}", approve_receipt.transaction_hash),
+        "buy_tx": format!("{:?}", buy_receipt.transaction_hash),
+        "payment_amount": format!("{}", payment_required),
+        "token_amount": token_amount,
+        "block_number": buy_receipt.block_number.map(|b| b.as_u64())
+    }))
+}
+
+// Function to run the RISC Zero zkVM verification
+async fn run_zkvm_verification() -> serde_json::Value {
+    // Get the current directory
+    let current_dir = std::env::current_dir().unwrap();
+    
+    // Path to the smartcore-zk-ml directory
+    let zkvm_dir = current_dir.join("smartcore-zk-ml").join("smartcore-zk-ml");
+    
+    // Create the command to run cargo
+    let output = std::process::Command::new("cargo")
+        .current_dir(&zkvm_dir)
+        .env("RISC0_DEV_MODE", "0")  // Disable dev mode
+        .arg("run")
+        .arg("--release")
+        .output();
+    
+    let zkvm_result = match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            
+            // Check if the command was successful
+            if output.status.success() {
+                // Try to read the proof.json file
+                let proof_path = zkvm_dir.join("proof.json");
+                let proof_result = std::fs::read_to_string(proof_path);
+                
+                let proof_json = match proof_result {
+                    Ok(proof_str) => {
+                        match serde_json::from_str::<serde_json::Value>(&proof_str) {
+                            Ok(json) => json,
+                            Err(_) => serde_json::json!({"error": "Failed to parse proof.json"})
+                        }
+                    },
+                    Err(_) => serde_json::json!({"error": "Failed to read proof.json"})
+                };
+                
+                serde_json::json!({
+                    "success": true,
+                    "stdout": stdout,
+                    "proof": proof_json
+                })
+            } else {
+                serde_json::json!({
+                    "success": false,
+                    "stdout": stdout,
+                    "stderr": stderr
+                })
+            }
+        },
+        Err(e) => {
+            serde_json::json!({
+                "success": false,
+                "error": format!("Failed to execute command: {}", e)
+            })
+        }
+    };
+    
+    // Now make a request to the proof verification server
+    let client = reqwest::Client::new();
+    let receipt_path = "smartcore-zk-ml/smartcore-zk-ml/proof.json";
+    
+    let verification_result = match client.post("http://localhost:6000/verify")
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "receiptPath": receipt_path
+        }))
+        .send()
+        .await {
+            Ok(response) => {
+                match response.json::<serde_json::Value>().await {
+                    Ok(json) => json,
+                    Err(e) => serde_json::json!({
+                        "verification_error": format!("Failed to parse verification response: {}", e)
+                    })
+                }
+            },
+            Err(e) => serde_json::json!({
+                "verification_error": format!("Failed to send verification request: {}", e)
+            })
+        };
+    
+    // Combine both results
+    serde_json::json!({
+        "zkvm_result": zkvm_result,
+        "verification_result": verification_result
+    })
 }
 
 async fn train_random_forest(params: web::Json<RFParameters>) -> HttpResponse {
@@ -224,16 +573,131 @@ async fn train_random_forest(params: web::Json<RFParameters>) -> HttpResponse {
         seed: 42,
     };
 
-    match train_rf_model(model_params) {
-        Ok(predictions) => HttpResponse::Ok().json(predictions),
-        Err(_) => HttpResponse::InternalServerError().finish()
+    // Log the wallet address and accuracy
+    println!("Training random forest for wallet: {}, desired accuracy: {}", 
+             params.wallet_address, params.accuracy);
+
+    let dataset_path = format!("src/{}.csv", params.dataset_title);
+    
+    match train_rf_model(model_params, &dataset_path) {
+        Ok(predictions) => {
+            // Create directories if they don't exist
+            std::fs::create_dir_all("res/ml-model").unwrap_or_default();
+            std::fs::create_dir_all("res/input-data").unwrap_or_default();
+            
+            // Load the dataset again to save it
+            let input = readers::csv::matrix_from_csv_source::<f32, Vec<_>, DenseMatrix<_>>(
+                File::open(&dataset_path).unwrap(),
+                readers::csv::CSVDefinition::default()
+            ).unwrap();
+            
+            // Get the labels
+            let df = CsvReader::from_path(&dataset_path).unwrap()
+                .has_header(true)
+                .finish().unwrap();
+            
+            let columns = df.get_column_names();
+            let target_column = columns.last().unwrap();
+            
+            let y_u8s: Vec<u8> = df.column(target_column).unwrap()
+                .cast(&DataType::Int64).unwrap()
+                .i64().unwrap()
+                .into_no_null_iter()
+                .map(|x| x as u8)
+                .collect();
+            
+            // Load the model
+            let model_path = format!("src/{}_rf_model.bin", params.dataset_title);
+            let mut model_file = File::open(&model_path).unwrap();
+            let mut model_bytes = Vec::new();
+            model_file.read_to_end(&mut model_bytes).unwrap();
+            
+            // Save to res/ directory
+            let mut f = File::create("res/ml-model/rf_model_bytes.bin").unwrap();
+            f.write_all(&model_bytes).unwrap();
+            
+            let data_bytes = rmp_serde::to_vec(&input).unwrap();
+            let mut f1 = File::create("res/input-data/rf_model_data_bytes.bin").unwrap();
+            f1.write_all(&data_bytes).unwrap();
+            
+            let labels_bytes = rmp_serde::to_vec(&y_u8s).unwrap();
+            let mut f2 = File::create("res/input-data/rf_model_labels.bin").unwrap();
+            f2.write_all(&labels_bytes).unwrap();
+            
+            HttpResponse::Ok().json(serde_json::json!({
+                "predictions": predictions,
+                "accuracy_param": params.accuracy,
+                "wallet_address": params.wallet_address
+            }))
+        },
+        Err(e) => {
+            println!("Error training random forest: {}", e);
+            HttpResponse::InternalServerError().body(format!("Error training model: {}", e))
+        }
     }
 }
 
-async fn train_linear_regression() -> HttpResponse {
-    match train_lr_model() {
-        Ok(predictions) => HttpResponse::Ok().json(predictions),
-        Err(_) => HttpResponse::InternalServerError().finish()
+async fn train_linear_regression(params: web::Json<LRParameters>) -> HttpResponse {
+    // Log the wallet address and accuracy
+    println!("Training linear regression for wallet: {}, desired accuracy: {}", 
+             params.wallet_address, params.accuracy);
+
+    let dataset_path = format!("src/{}.csv", params.dataset_title);
+    
+    match train_lr_model(&dataset_path) {
+        Ok(predictions) => {
+            // Create directories if they don't exist
+            std::fs::create_dir_all("res/ml-model").unwrap_or_default();
+            std::fs::create_dir_all("res/input-data").unwrap_or_default();
+            
+            // Load the dataset again to save it
+            let input = readers::csv::matrix_from_csv_source::<f32, Vec<_>, DenseMatrix<_>>(
+                File::open(&dataset_path).unwrap(),
+                readers::csv::CSVDefinition::default()
+            ).unwrap();
+            
+            // Get the labels
+            let df = CsvReader::from_path(&dataset_path).unwrap()
+                .has_header(true)
+                .finish().unwrap();
+            
+            let columns = df.get_column_names();
+            let target_column = columns.last().unwrap();
+            
+            let y_f32s: Vec<f32> = df.column(target_column).unwrap()
+                .cast(&DataType::Float32).unwrap()
+                .f32().unwrap()
+                .into_no_null_iter()
+                .collect();
+            
+            // Load the model
+            let model_path = format!("src/{}_lr_model.bin", params.dataset_title);
+            let mut model_file = File::open(&model_path).unwrap();
+            let mut model_bytes = Vec::new();
+            model_file.read_to_end(&mut model_bytes).unwrap();
+            
+            // Save to res/ directory
+            let mut f = File::create("res/ml-model/lr_model_bytes.bin").unwrap();
+            f.write_all(&model_bytes).unwrap();
+            
+            let data_bytes = rmp_serde::to_vec(&input).unwrap();
+            let mut f1 = File::create("res/input-data/lr_model_data_bytes.bin").unwrap();
+            f1.write_all(&data_bytes).unwrap();
+            
+            let labels_bytes = rmp_serde::to_vec(&y_f32s).unwrap();
+            let mut f2 = File::create("res/input-data/lr_model_labels.bin").unwrap();
+            f2.write_all(&labels_bytes).unwrap();
+            
+            HttpResponse::Ok().json(serde_json::json!({
+                "predictions": predictions,
+                "accuracy_param": params.accuracy,
+                "wallet_address": params.wallet_address
+            }))
+        },
+        Err(e) => {
+            println!("Error training linear regression: {}", e);
+            HttpResponse::InternalServerError().body(format!("Error training model: {}", e))
+        }
     }
 }
 
@@ -348,8 +812,10 @@ async fn add_dataset(mut payload: Multipart) -> HttpResponse {
         return HttpResponse::BadRequest().body("No file uploaded");
     }
     
+    println!("Dataset chain_id: {:?}", dataset.chain_id);
     // Create bonding curve for the dataset if chain_id is provided
     if dataset.chain_id.is_some() {
+        println!("Creating bonding curve for dataset: {}", dataset.title);
         let req = CreateBondingCurveRequest {
             dataset_title: dataset.title.clone(),
             chain_id: dataset.chain_id,
@@ -383,52 +849,161 @@ async fn add_dataset(mut payload: Multipart) -> HttpResponse {
     }
 }
 
-fn train_dt_model(params: DecisionTreeClassifierParameters) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
-    let input = readers::csv::matrix_from_csv_source::<f64, Vec<_>, DenseMatrix<_>>(
-        File::open("src/iris_input_data.csv").unwrap(),
+fn train_dt_model(params: DecisionTreeClassifierParameters, dataset_path: &str) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
+    // Check if the file exists
+    if !std::path::Path::new(dataset_path).exists() {
+        return Err(format!("Dataset file not found: {}", dataset_path).into());
+    }
+    
+    // Load the dataset
+    let input = match readers::csv::matrix_from_csv_source::<f64, Vec<_>, DenseMatrix<_>>(
+        File::open(dataset_path)?,
         readers::csv::CSVDefinition::default()
-    ).unwrap();
+    ) {
+        Ok(matrix) => matrix,
+        Err(e) => return Err(format!("Error reading CSV: {:?}", e).into()),
+    };
 
-    let filepath_iris_classes = "src/iris_classes.csv";
-    let y_u32s: Vec<u32> = CsvReader::new(File::open(filepath_iris_classes).unwrap()).finish().unwrap()
-        .column("variety").unwrap().clone()
-        .i64().unwrap().into_no_null_iter().collect::<Vec<i64>>()
-        .into_iter().map(|x| x as u32).collect();
+    // For simplicity, we'll assume the last column is the target variable
+    let df = CsvReader::from_path(dataset_path)?
+        .has_header(true)
+        .finish()?;
+    
+    // Get the name of the last column
+    let columns = df.get_column_names();
+    let target_column = columns.last().ok_or("Dataset has no columns")?;
+    
+    // Extract the target column
+    let y_u32s: Vec<u32> = df.column(target_column)?
+        .cast(&DataType::Int64)?
+        .i64()?
+        .into_no_null_iter()
+        .map(|x| x as u32)
+        .collect();
 
-    let model = DecisionTreeClassifier::fit(&input, &y_u32s, params).unwrap();
-    let predictions = model.predict(&input).unwrap();
+    // Train the model
+    let model = match DecisionTreeClassifier::fit(&input, &y_u32s, params) {
+        Ok(model) => model,
+        Err(e) => return Err(format!("Error training model: {:?}", e).into()),
+    };
+    
+    // Make predictions
+    let predictions = match model.predict(&input) {
+        Ok(preds) => preds,
+        Err(e) => return Err(format!("Error making predictions: {:?}", e).into()),
+    };
+    
+    // Save the model to a file
+    let model_path = format!("src/{}_dt_model.bin", dataset_path.trim_start_matches("src/").trim_end_matches(".csv"));
+    let mut file = File::create(model_path)?;
+    let serialized = rmp_serde::to_vec(&model)?;
+    file.write_all(&serialized)?;
+    
     Ok(predictions)
 }
 
-fn train_rf_model(params: RandomForestClassifierParameters) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let input = readers::csv::matrix_from_csv_source::<f32, Vec<_>, DenseMatrix<_>>(
-        File::open("src/iris_input_data.csv").unwrap(),
+fn train_rf_model(params: RandomForestClassifierParameters, dataset_path: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // Check if the file exists
+    if !std::path::Path::new(dataset_path).exists() {
+        return Err(format!("Dataset file not found: {}", dataset_path).into());
+    }
+    
+    // Load the dataset
+    let input = match readers::csv::matrix_from_csv_source::<f32, Vec<_>, DenseMatrix<_>>(
+        File::open(dataset_path)?,
         readers::csv::CSVDefinition::default()
-    ).unwrap();
+    ) {
+        Ok(matrix) => matrix,
+        Err(e) => return Err(format!("Error reading CSV: {:?}", e).into()),
+    };
 
-    let y_u8s: Vec<u8> = CsvReader::new(File::open("src/iris_classes.csv").unwrap()).finish().unwrap()
-        .column("variety").unwrap().clone()
-        .i64().unwrap().into_no_null_iter().collect::<Vec<i64>>()
-        .into_iter().map(|x| x as u8).collect();
+    // For simplicity, we'll assume the last column is the target variable
+    let df = CsvReader::from_path(dataset_path)?
+        .has_header(true)
+        .finish()?;
+    
+    // Get the name of the last column
+    let columns = df.get_column_names();
+    let target_column = columns.last().ok_or("Dataset has no columns")?;
+    
+    // Extract the target column
+    let y_u8s: Vec<u8> = df.column(target_column)?
+        .cast(&DataType::Int64)?
+        .i64()?
+        .into_no_null_iter()
+        .map(|x| x as u8)
+        .collect();
 
-    let model = RandomForestClassifier::fit(&input, &y_u8s, params).unwrap();
-    let predictions = model.predict(&input).unwrap();
+    // Train the model
+    let model = match RandomForestClassifier::fit(&input, &y_u8s, params) {
+        Ok(model) => model,
+        Err(e) => return Err(format!("Error training model: {:?}", e).into()),
+    };
+    
+    // Make predictions
+    let predictions = match model.predict(&input) {
+        Ok(preds) => preds,
+        Err(e) => return Err(format!("Error making predictions: {:?}", e).into()),
+    };
+    
+    // Save the model to a file
+    let model_path = format!("src/{}_rf_model.bin", dataset_path.trim_start_matches("src/").trim_end_matches(".csv"));
+    let mut file = File::create(model_path)?;
+    let serialized = rmp_serde::to_vec(&model)?;
+    file.write_all(&serialized)?;
+    
     Ok(predictions)
 }
 
-fn train_lr_model() -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-    let input = readers::csv::matrix_from_csv_source::<f32, Vec<_>, DenseMatrix<_>>(
-        File::open("src/iris_input_data.csv").unwrap(),
+fn train_lr_model(dataset_path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    // Check if the file exists
+    if !std::path::Path::new(dataset_path).exists() {
+        return Err(format!("Dataset file not found: {}", dataset_path).into());
+    }
+    
+    // Load the dataset
+    let input = match readers::csv::matrix_from_csv_source::<f32, Vec<_>, DenseMatrix<_>>(
+        File::open(dataset_path)?,
         readers::csv::CSVDefinition::default()
-    ).unwrap();
+    ) {
+        Ok(matrix) => matrix,
+        Err(e) => return Err(format!("Error reading CSV: {:?}", e).into()),
+    };
 
-    let y_f32s: Vec<f32> = CsvReader::new(File::open("src/iris_classes.csv").unwrap()).finish().unwrap()
-        .column("variety").unwrap().clone()
-        .i64().unwrap().into_no_null_iter().collect::<Vec<i64>>()
-        .into_iter().map(|x| x as f32).collect();
+    // For simplicity, we'll assume the last column is the target variable
+    let df = CsvReader::from_path(dataset_path)?
+        .has_header(true)
+        .finish()?;
+    
+    // Get the name of the last column
+    let columns = df.get_column_names();
+    let target_column = columns.last().ok_or("Dataset has no columns")?;
+    
+    // Extract the target column
+    let y_f32s: Vec<f32> = df.column(target_column)?
+        .cast(&DataType::Float32)?
+        .f32()?
+        .into_no_null_iter()
+        .collect();
 
-    let model = LinearRegression::fit(&input, &y_f32s, Default::default()).unwrap();
-    let predictions = model.predict(&input).unwrap();
+    // Train the model
+    let model = match LinearRegression::fit(&input, &y_f32s, Default::default()) {
+        Ok(model) => model,
+        Err(e) => return Err(format!("Error training model: {:?}", e).into()),
+    };
+    
+    // Make predictions
+    let predictions = match model.predict(&input) {
+        Ok(preds) => preds,
+        Err(e) => return Err(format!("Error making predictions: {:?}", e).into()),
+    };
+    
+    // Save the model to a file
+    let model_path = format!("src/{}_lr_model.bin", dataset_path.trim_start_matches("src/").trim_end_matches(".csv"));
+    let mut file = File::create(model_path)?;
+    let serialized = rmp_serde::to_vec(&model)?;
+    file.write_all(&serialized)?;
+    
     Ok(predictions)
 }
 
@@ -533,6 +1108,321 @@ async fn create_bonding_curve_for_dataset(req: CreateBondingCurveRequest) -> Res
     Ok(curve_info)
 }
 
+async fn buy_tokens(path: web::Path<(String, String)>) -> HttpResponse {
+    let (curve_address, amount) = path.into_inner();
+    // Parse the curve address
+    let curve_address = match Address::from_str(&curve_address) {
+        Ok(addr) => addr,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid curve address")
+    };
+    
+    // Parse the amount (expected in full tokens, will be converted to wei)
+    let amount = match amount.parse::<f64>() {
+        Ok(val) => {
+            // Convert to wei (assuming 18 decimals)
+            let wei_amount = (val * 1e18) as u128;
+            U256::from(wei_amount)
+        },
+        Err(_) => return HttpResponse::BadRequest().body("Invalid amount")
+    };
+    
+    // Use the global wallet
+    let wallet = WALLET.clone();
+    
+    // For this example, we'll use the Aeneid chain (1315)
+    let chain_id = 1315;
+    
+    let provider_url = match PROVIDER_URLS.get(&chain_id) {
+        Some(url) => url,
+        None => return HttpResponse::BadRequest().body("No provider URL for chain ID 1315")
+    };
+    
+    let provider = match Provider::<Http>::try_from(provider_url.as_str()) {
+        Ok(p) => p,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Provider error: {}", e))
+    };
+    
+    let client = Arc::new(SignerMiddleware::new(provider, wallet.with_chain_id(chain_id)));
+    
+    // Load curve ABI
+    let abi_json = match std::fs::read_to_string("src/abi/curve_abi.json") {
+        Ok(json) => json,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to read ABI: {}", e))
+    };
+    
+    // Create contract instance
+    let abi = match serde_json::from_str::<ethers::abi::Abi>(&abi_json) {
+        Ok(abi) => abi,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to parse ABI: {}", e))
+    };
+    
+    let curve = Contract::new(curve_address, abi, client);
+    
+    // Call buy function
+    let tx = match curve.method::<_, ()>("buy", amount) {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to create transaction: {}", e))
+    };
+    
+    // Send the transaction
+    let pending_tx = match tx.send().await {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to send transaction: {}", e))
+    };
+    
+    // Wait for the transaction to be mined
+    match pending_tx.await {
+        Ok(receipt) => {
+            match receipt {
+                Some(r) => HttpResponse::Ok().json(serde_json::json!({
+                    "status": "success",
+                    "transaction_hash": format!("{:?}", r.transaction_hash),
+                    "block_number": r.block_number.map(|b| b.as_u64())
+                })),
+                None => HttpResponse::InternalServerError().body("Transaction failed")
+            }
+        },
+        Err(e) => HttpResponse::InternalServerError().body(format!("Transaction error: {}", e))
+    }
+}
+
+async fn buy_iris_tokens() -> HttpResponse {
+    // Hardcoded values
+    let curve_address = "0x13c44aa3377246f05546f9e3b0104792f944d81b";
+    let token_amount = "100"; // 100 tokens to buy
+    
+    // Parse the curve address
+    let curve_address_parsed = match Address::from_str(curve_address) {
+        Ok(addr) => addr,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid curve address")
+    };
+    
+    // Convert token amount to wei (assuming 18 decimals)
+    let token_amount_wei = match token_amount.parse::<f64>() {
+        Ok(val) => {
+            let wei_amount = (val * 1e18) as u128;
+            U256::from(wei_amount)
+        },
+        Err(_) => return HttpResponse::BadRequest().body("Invalid amount")
+    };
+    
+    // Set up provider and client
+    let wallet = WALLET.clone();
+    let chain_id = 1315; // Aeneid chain
+    
+    let provider_url = match PROVIDER_URLS.get(&chain_id) {
+        Some(url) => url,
+        None => return HttpResponse::BadRequest().body("No provider URL for chain ID 1315")
+    };
+    
+    let provider = match Provider::<Http>::try_from(provider_url.as_str()) {
+        Ok(p) => p,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Provider error: {}", e))
+    };
+    
+    let client = Arc::new(SignerMiddleware::new(provider, wallet.with_chain_id(chain_id)));
+    
+    // Load curve ABI
+    let curve_abi_json = match std::fs::read_to_string("src/abi/curve_abi.json") {
+        Ok(json) => json,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to read ABI: {}", e))
+    };
+    
+    // Create curve contract instance
+    let curve_abi = match serde_json::from_str::<ethers::abi::Abi>(&curve_abi_json) {
+        Ok(abi) => abi,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to parse ABI: {}", e))
+    };
+    
+    let curve = Contract::new(curve_address_parsed, curve_abi, client.clone());
+    
+    // STEP 1: Call calculatePaymentRequired to get the exact payment amount needed
+    let payment_required: U256 = match curve.method::<_, U256>("calculatePaymentRequired", U256::from(100)) { // HARD CODED to 100 :o)
+        Ok(method) => {
+            match method.call().await {
+                Ok(amount) => amount,
+                Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to calculate payment required: {}", e))
+            }
+        },
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to create method call: {}", e))
+    };
+    
+    println!("Payment required: {} wei for {} tokens", payment_required, token_amount);
+    
+    // Get the payment token address for this chain
+    let payment_token_address = match PAYMENT_TOKENS.get(&chain_id) {
+        Some(addr) => *addr,
+        None => return HttpResponse::BadRequest().body("No payment token configured for chain ID 1315")
+    };
+    
+    // Load ERC20 ABI
+    let erc20_abi_json = match std::fs::read_to_string("src/abi/erc20_abi.json") {
+        Ok(json) => json,
+        Err(_) => {
+            // Fallback to a minimal ERC20 ABI if file doesn't exist
+            r#"[{"constant":false,"inputs":[{"name":"_spender","type":"address"},{"name":"_value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"}]"#.to_string()
+        }
+    };
+    
+    // Create token contract instance
+    let erc20_abi = match serde_json::from_str::<ethers::abi::Abi>(&erc20_abi_json) {
+        Ok(abi) => abi,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to parse ERC20 ABI: {}", e))
+    };
+    
+    let token = Contract::new(payment_token_address, erc20_abi, client.clone());
+    
+    // STEP 2: Call approve function with the exact payment amount needed
+    let approve_tx = match token.method::<_, bool>("approve", (curve_address_parsed, payment_required)) {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to create approve transaction: {}", e))
+    };
+    
+    // Send the approve transaction
+    let approve_pending_tx = match approve_tx.send().await {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to send approve transaction: {}", e))
+    };
+    
+    // Wait for the approve transaction to be mined
+    let approve_receipt = match approve_pending_tx.await {
+        Ok(receipt) => {
+            match receipt {
+                Some(r) => r,
+                None => return HttpResponse::InternalServerError().body("Approve transaction failed")
+            }
+        },
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Approve transaction error: {}", e))
+    };
+    
+    println!("Approve transaction successful: {:?}", approve_receipt.transaction_hash);
+    
+    // STEP 3: Now call buy function with the token amount
+    let buy_tx = match curve.method::<_, ()>("buy", token_amount_wei) {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to create buy transaction: {}", e))
+    };
+    
+    // Send the buy transaction
+    let buy_pending_tx = match buy_tx.send().await {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to send buy transaction: {}", e))
+    };
+    
+    // Wait for the buy transaction to be mined
+    match buy_pending_tx.await {
+        Ok(receipt) => {
+            match receipt {
+                Some(r) => HttpResponse::Ok().json(serde_json::json!({
+                    "status": "success",
+                    "approve_tx": format!("{:?}", approve_receipt.transaction_hash),
+                    "buy_tx": format!("{:?}", r.transaction_hash),
+                    "payment_amount": format!("{}", payment_required),
+                    "token_amount": token_amount,
+                    "block_number": r.block_number.map(|b| b.as_u64())
+                })),
+                None => HttpResponse::InternalServerError().body("Buy transaction failed")
+            }
+        },
+        Err(e) => HttpResponse::InternalServerError().body(format!("Buy transaction error: {}", e))
+    }
+}
+
+async fn approve_token_for_curve(path: web::Path<(String, String)>) -> HttpResponse {
+    let (curve_address, amount) = path.into_inner();
+    
+    // Parse the curve address
+    let curve_address = match Address::from_str(&curve_address) {
+        Ok(addr) => addr,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid curve address")
+    };
+    
+    // Parse the amount (expected in full tokens, will be converted to wei)
+    let amount = match amount.parse::<f64>() {
+        Ok(val) => {
+            // Convert to wei (assuming 18 decimals)
+            let wei_amount = (val * 1e18) as u128;
+            U256::from(wei_amount)
+        },
+        Err(_) => return HttpResponse::BadRequest().body("Invalid amount")
+    };
+    
+    // Use the global wallet
+    let wallet = WALLET.clone();
+    let chain_id = 1315; // Aeneid chain
+    
+    let provider_url = match PROVIDER_URLS.get(&chain_id) {
+        Some(url) => url,
+        None => return HttpResponse::BadRequest().body("No provider URL for chain ID 1315")
+    };
+    
+    let provider = match Provider::<Http>::try_from(provider_url.as_str()) {
+        Ok(p) => p,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Provider error: {}", e))
+    };
+    
+    let client = Arc::new(SignerMiddleware::new(provider, wallet.with_chain_id(chain_id)));
+    
+    // Get the payment token address for this chain
+    let payment_token_address = match PAYMENT_TOKENS.get(&chain_id) {
+        Some(addr) => *addr,
+        None => return HttpResponse::BadRequest().body("No payment token configured for chain ID 1315")
+    };
+    
+    // Load ERC20 ABI
+    let abi_json = match std::fs::read_to_string("src/abi/erc20_abi.json") {
+        Ok(json) => json,
+        Err(_) => {
+            // Fallback to a minimal ERC20 ABI if file doesn't exist
+            r#"[{"constant":false,"inputs":[{"name":"_spender","type":"address"},{"name":"_value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"}]"#.to_string()
+        }
+    };
+    
+    // Create token contract instance
+    let abi = match serde_json::from_str::<ethers::abi::Abi>(&abi_json) {
+        Ok(abi) => abi,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to parse ABI: {}", e))
+    };
+    
+    let token = Contract::new(payment_token_address, abi, client);
+    
+    // Call approve function
+    let tx = match token.method::<_, bool>("approve", (curve_address, amount)) {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to create transaction: {}", e))
+    };
+    
+    // Send the transaction
+    let pending_tx = match tx.send().await {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to send transaction: {}", e))
+    };
+    
+    // Wait for the transaction to be mined
+    match pending_tx.await {
+        Ok(receipt) => {
+            match receipt {
+                Some(r) => HttpResponse::Ok().json(serde_json::json!({
+                    "status": "success",
+                    "transaction_hash": format!("{:?}", r.transaction_hash),
+                    "block_number": r.block_number.map(|b| b.as_u64())
+                })),
+                None => HttpResponse::InternalServerError().body("Transaction failed")
+            }
+        },
+        Err(e) => HttpResponse::InternalServerError().body(format!("Transaction error: {}", e))
+    }
+}
+
+// Add a hardcoded function to approve 100 tokens for the specific contract
+async fn approve_iris_tokens() -> HttpResponse {
+    // Hardcoded values
+    let curve_address = "0x13c44aa3377246f05546f9e3b0104792f944d81b";
+    let amount = "100"; // 100 tokens
+    
+    approve_token_for_curve(web::Path::from((curve_address.to_string(), amount.to_string()))).await
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Load environment variables from .env file
@@ -576,11 +1466,13 @@ async fn main() -> std::io::Result<()> {
             .route("/train/rf", web::post().to(train_random_forest))
             .route("/train/lr", web::post().to(train_linear_regression))
             .route("/bonding-curve/create", web::post().to(create_bonding_curve))
+            .route("/buy/{curve_address}/{amount}", web::get().to(buy_tokens))
+            .route("/buy-iris", web::get().to(buy_iris_tokens))
+            .route("/approve/{curve_address}/{amount}", web::get().to(approve_token_for_curve))
+            .route("/approve-iris", web::get().to(approve_iris_tokens))
             
     })
     .bind(("127.0.0.1", 8080))?
     .run()
     .await
 }
-
-// spolav after train_dt_model, we just run the verification right here right now!!!

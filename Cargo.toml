@@ -7,7 +7,7 @@ edition = "2021"
 actix-web = "4.0"
 smartcore = { version = "0.3.2", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
-polars = "*"
+polars = "0.32.0"
 serde_json = "1.0"
 rmp-serde = "1.1.2"
 actix-multipart = "0.6"
@@ -19,3 +19,12 @@ tokio = { version = "1", features = ["full"] }
 lazy_static = "1.4.0"
 rand = "0.8.5"
 dotenv = "0.15.0"
+hedera = "0.13.0"
+time = "0.3.37"
+reqwest = { version = "0.11", features = ["json"] }
+base64 = "0.13"
+
+
+[[bin]]
+name = "no_http_main"
+path = "no_http_main.rs"

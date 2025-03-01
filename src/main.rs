@@ -171,24 +171,7 @@ struct MLParameters {
     accuracy: f64,
     wallet_address: String,
     
-}
-
-#[derive(Deserialize)]
-struct RFParameters {
-    max_depth: Option<u16>,
-    min_samples_leaf: u16,
-    min_samples_split: u16,
-    n_trees: u16,
-    dataset_title: String,
-    accuracy: f64,
-    wallet_address: String,
-}
-
-#[derive(Deserialize)]
-struct LRParameters {
-    dataset_title: String,
-    accuracy: f64,
-    wallet_address: String,
+    
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -299,7 +282,7 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
             let mut f2 = File::create("res/input-data/tree_model_labels.bin").unwrap();
             f2.write_all(&labels_bytes).unwrap();
             
-            // Commented out for brevity!
+            // Comment out for brevity!
             let output = run_zkvm_verification().await;
             // let output = serde_json::json!({
             //     "zkvm_result": {
@@ -900,7 +883,7 @@ fn train_dt_model(params: DecisionTreeClassifierParameters, dataset_path: &str) 
         Err(e) => return Err(format!("Error reading CSV: {:?}", e).into()),
     };
 
-    // For simplicity, we'll assume the last column is the target variable
+    // The last column is the target variable
     let df = CsvReader::from_path(dataset_path)?
         .has_header(true)
         .finish()?;

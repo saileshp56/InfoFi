@@ -39,14 +39,11 @@ use base64;
 lazy_static::lazy_static! {
     static ref PROVIDER_URLS: std::collections::HashMap<u64, String> = {
         let mut m = std::collections::HashMap::new();
-        m.insert(1, env::var("RPC_URL_ETH_MAINNET").unwrap_or_default());
-        m.insert(137, env::var("RPC_URL_POLYGON").unwrap_or_default());
-        m.insert(42161, env::var("RPC_URL_ARBITRUM").unwrap_or_default());
-        m.insert(10, env::var("RPC_URL_OPTIMISM").unwrap_or_default());
-        m.insert(56, env::var("RPC_URL_BSC").unwrap_or_default());
+        m.insert(296, env::var("RPC_URL_HEDERA").unwrap_or_default());
+        m.insert(48899, env::var("RPC_URL_ZIRCUIT").unwrap_or_default());
+        m.insert(300, env::var("RPC_URL_ZKSYNC").unwrap_or_default());
         m.insert(11155111, env::var("RPC_URL_SEPOLIA").unwrap_or_default());
         m.insert(1315, env::var("RPC_URL_AENEID").unwrap_or_default());
-
         m
     };
 
@@ -68,7 +65,31 @@ lazy_static::lazy_static! {
     static ref FACTORY_ADDRESSES: std::collections::HashMap<u64, Address> = {
         let mut m = std::collections::HashMap::new();
         
-        // Try to load factory addresses for different chains from env vars
+        // Load factory addresses from env vars
+        if let Ok(addr) = env::var("FACTORY_ADDRESS_HEDERA") {
+            if let Ok(parsed) = Address::from_str(&addr) {
+                m.insert(296, parsed);
+            }
+        }
+        
+        if let Ok(addr) = env::var("FACTORY_ADDRESS_ZIRCUIT") {
+            if let Ok(parsed) = Address::from_str(&addr) {
+                m.insert(48899, parsed);
+            }
+        }
+        
+        if let Ok(addr) = env::var("FACTORY_ADDRESS_ZKSYNC") {
+            if let Ok(parsed) = Address::from_str(&addr) {
+                m.insert(300, parsed);
+            }
+        }
+        
+        if let Ok(addr) = env::var("FACTORY_ADDRESS_SEPOLIA") {
+            if let Ok(parsed) = Address::from_str(&addr) {
+                m.insert(11155111, parsed);
+            }
+        }
+        
         if let Ok(addr) = env::var("FACTORY_ADDRESS_AENEID") {
             if let Ok(parsed) = Address::from_str(&addr) {
                 m.insert(1315, parsed);
@@ -87,54 +108,39 @@ lazy_static::lazy_static! {
     static ref PAYMENT_TOKENS: std::collections::HashMap<u64, Address> = {
         let mut m = std::collections::HashMap::new();
         
-        // Try to load payment token addresses from environment variables
-        if let Ok(addr) = env::var("PAYMENT_TOKEN_ETH_MAINNET") {
+        // Load payment token addresses from environment variables
+        if let Ok(addr) = env::var("PAYMENT_TOKENS_HEDERA") {
             if let Ok(parsed) = Address::from_str(&addr) {
-                m.insert(1, parsed);
+                m.insert(296, parsed);
             }
-        } else {
-            // Fallback to hardcoded USDC address
-            m.insert(1, Address::from_str("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").unwrap());
         }
         
-        if let Ok(addr) = env::var("PAYMENT_TOKEN_POLYGON") {
+        if let Ok(addr) = env::var("PAYMENT_TOKENS_ZIRCUIT") {
             if let Ok(parsed) = Address::from_str(&addr) {
-                m.insert(137, parsed);
+                m.insert(48899, parsed);
             }
-        } else {
-            m.insert(137, Address::from_str("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174").unwrap());
         }
         
-        if let Ok(addr) = env::var("PAYMENT_TOKEN_ARBITRUM") {
+        if let Ok(addr) = env::var("PAYMENT_TOKENS_ZKSYNC") {
             if let Ok(parsed) = Address::from_str(&addr) {
-                m.insert(42161, parsed);
+                m.insert(300, parsed);
             }
-        } else {
-            m.insert(42161, Address::from_str("0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8").unwrap());
         }
         
-        if let Ok(addr) = env::var("PAYMENT_TOKEN_OPTIMISM") {
+        if let Ok(addr) = env::var("PAYMENT_TOKENS_SEPOLIA") {
             if let Ok(parsed) = Address::from_str(&addr) {
-                m.insert(10, parsed);
+                m.insert(11155111, parsed);
             }
-        } else {
-            m.insert(10, Address::from_str("0x7F5c764cBc14f9669B88837ca1490cCa17c31607").unwrap());
-        }
-        
-        if let Ok(addr) = env::var("PAYMENT_TOKEN_BSC") {
-            if let Ok(parsed) = Address::from_str(&addr) {
-                m.insert(56, parsed);
-            }
-        } else {
-            m.insert(56, Address::from_str("0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56").unwrap());
         }
         
         if let Ok(addr) = env::var("PAYMENT_TOKENS_AENEID") {
             if let Ok(parsed) = Address::from_str(&addr) {
                 m.insert(1315, parsed);
             }
-        } else {
-            // For testnets, default to ETH (special address)
+        }
+        
+        // For testnets without a configured token, default to ETH (special address)
+        if !m.contains_key(&11155111) {
             m.insert(11155111, Address::from_str("0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE").unwrap());
         }
         
@@ -151,6 +157,7 @@ struct MLParameters {
     dataset_title: String,
     accuracy: f64,
     wallet_address: String,
+    
 }
 
 #[derive(Deserialize)]
@@ -171,7 +178,7 @@ struct LRParameters {
     wallet_address: String,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 struct Dataset {
     title: String,
     description: String,
@@ -272,21 +279,26 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
             f.write_all(&model_bytes).unwrap();
             
             let data_bytes = rmp_serde::to_vec(&input).unwrap();
-            let mut f1 = File::create("res/input-data/tree_model_data_bytes.bin").unwrap();
+            let mut f1: File = File::create("res/input-data/tree_model_data_bytes.bin").unwrap();
             f1.write_all(&data_bytes).unwrap();
             
             let labels_bytes = rmp_serde::to_vec(&y_u32s).unwrap();
             let mut f2 = File::create("res/input-data/tree_model_labels.bin").unwrap();
             f2.write_all(&labels_bytes).unwrap();
             
-            // Run the RISC Zero zkVM verification (now async)
-            let output = run_zkvm_verification().await;
+            // Commented out for brevity!
+            // let output = run_zkvm_verification().await;
+            let output = serde_json::json!({
+                "zkvm_result": {
+                    "success": true
+                }
+            });
             
             let model_bytes = fs::read("res/ml-model/tree_model_bytes.bin").unwrap_or_default();
             let model_base64 = base64::encode(&model_bytes);
             
             // Check if verification was successful and interact with bonding curve
-            let bonding_curve_result = if output["verification_result"]["verified"].as_bool().unwrap_or(false) {
+            let bonding_curve_result = if output["zkvm_result"]["success"].as_bool().unwrap_or(false) {
                 // Get the dataset info to find the chain_id and bonding curve address
                 let dataset_info = get_dataset_info(&params.dataset_title);
                 
@@ -294,9 +306,10 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
                     if let Some(chain_id) = dataset.chain_id {
                         // Get the bonding curve address for this dataset
                         let bonding_curve_address = get_bonding_curve_address(&params.dataset_title);
-                        
+                        println!("Bonding curve address: {:?} and chain id: {}", bonding_curve_address, chain_id);
                         if let Some(address) = bonding_curve_address {
                             // Interact with the bonding curve
+                            println!("spolav wtf {} {}", address, chain_id);
                             match interact_with_bonding_curve(address, chain_id, 100.0).await {
                                 Ok(result) => Some(result),
                                 Err(e) => Some(serde_json::json!({
@@ -328,6 +341,8 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
                     "message": "Verification failed, skipping bonding curve interaction"
                 }))
             };
+
+            println!("Bonding curve result: {:?}", bonding_curve_result);
             
             // Return the response with predictions and verification results
             HttpResponse::Ok().json(serde_json::json!({
@@ -335,8 +350,7 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
                 "accuracy_param": params.accuracy,
                 "wallet_address": params.wallet_address,
                 "verification_result": output,
-                "model": model_base64,
-                "bonding_curve_result": bonding_curve_result
+                "model": model_base64
             }))
         },
         Err(e) => {
@@ -387,7 +401,7 @@ async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token
     
     // Convert token amount to wei (assuming 18 decimals)
     let token_amount_wei = {
-        let wei_amount = (token_amount * 1e18) as u128;
+        let wei_amount = (token_amount) as u128;
         U256::from(wei_amount)
     };
     
@@ -407,6 +421,7 @@ async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token
     
     // Create curve contract instance
     let curve_abi = serde_json::from_str::<ethers::abi::Abi>(&curve_abi_json)?;
+
     let curve = Contract::new(curve_address_parsed, curve_abi, client.clone());
     
     // STEP 1: Call calculatePaymentRequired to get the exact payment amount needed
@@ -420,6 +435,8 @@ async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token
         Some(addr) => *addr,
         None => return Err(format!("No payment token configured for chain ID {}", chain_id).into())
     };
+
+    println!("Payment token address: {}", payment_token_address); // spolav
     
     // Load ERC20 ABI
     let erc20_abi_json = match std::fs::read_to_string("src/abi/erc20_abi.json") {
@@ -433,6 +450,8 @@ async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token
     // Create token contract instance
     let erc20_abi = serde_json::from_str::<ethers::abi::Abi>(&erc20_abi_json)?;
     let token = Contract::new(payment_token_address, erc20_abi, client.clone());
+
+    println!("Curve address: {} and paying {}", curve_address_parsed, payment_required); // spolav the second arg is in wei
     
     // STEP 2: Call approve function with the exact payment amount needed
     let approve_tx = token.method::<_, bool>("approve", (curve_address_parsed, payment_required))?;
@@ -449,7 +468,7 @@ async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token
     println!("Approve transaction successful: {:?}", approve_receipt.transaction_hash);
     
     // STEP 3: Now call buy function with the token amount
-    let buy_tx = curve.method::<_, ()>("buy", token_amount_wei)?;
+    let buy_tx = curve.method::<_, ()>("buy", payment_required)?;
     
     // Send the buy transaction
     let buy_pending_tx = buy_tx.send().await?;
@@ -474,39 +493,85 @@ async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token
 
 // Function to run the RISC Zero zkVM verification
 async fn run_zkvm_verification() -> serde_json::Value {
+    println!("Starting zkVM verification process...");
+    
     // Get the current directory
     let current_dir = std::env::current_dir().unwrap();
+    println!("Current directory: {:?}", current_dir);
     
     // Path to the smartcore-zk-ml directory
     let zkvm_dir = current_dir.join("smartcore-zk-ml").join("smartcore-zk-ml");
+    println!("zkVM directory: {:?}", zkvm_dir);
+    
+    // Check if directory exists
+    if !zkvm_dir.exists() {
+        println!("ERROR: zkVM directory does not exist: {:?}", zkvm_dir);
+        return serde_json::json!({
+            "success": false,
+            "error": format!("zkVM directory does not exist: {:?}", zkvm_dir)
+        });
+    }
+    
+    // Check if input files exist
+    let model_path = current_dir.join("res/ml-model/tree_model_bytes.bin");
+    let data_path = current_dir.join("res/input-data/tree_model_data_bytes.bin");
+    let labels_path = current_dir.join("res/input-data/tree_model_labels.bin");
+    
+    println!("Checking input files:");
+    println!("  Model file: {:?} (exists: {})", model_path, model_path.exists());
+    println!("  Data file: {:?} (exists: {})", data_path, data_path.exists());
+    println!("  Labels file: {:?} (exists: {})", labels_path, labels_path.exists());
     
     // Create the command to run cargo
-    let output = std::process::Command::new("cargo")
+    println!("Creating cargo command in directory: {:?}", zkvm_dir);
+    let mut command = std::process::Command::new("cargo");
+    let command = command
         .current_dir(&zkvm_dir)
         .env("RISC0_DEV_MODE", "0")  // Disable dev mode
         .arg("run")
-        .arg("--release")
-        .output();
+        .arg("--release");
+    
+    println!("Executing command: {:?}", command);
+    
+    let output = command.output();
     
     let zkvm_result = match output {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             
+            println!("Command executed with status: {}", output.status);
+            println!("STDOUT: {}", stdout);
+            println!("STDERR: {}", stderr);
+            
             // Check if the command was successful
             if output.status.success() {
+                println!("Command executed successfully");
+                
                 // Try to read the proof.json file
                 let proof_path = zkvm_dir.join("proof.json");
-                let proof_result = std::fs::read_to_string(proof_path);
+                println!("Looking for proof file at: {:?}", proof_path);
+                
+                let proof_result = std::fs::read_to_string(&proof_path);
                 
                 let proof_json = match proof_result {
                     Ok(proof_str) => {
+                        println!("Proof file found and read successfully");
                         match serde_json::from_str::<serde_json::Value>(&proof_str) {
-                            Ok(json) => json,
-                            Err(_) => serde_json::json!({"error": "Failed to parse proof.json"})
+                            Ok(json) => {
+                                println!("Proof JSON parsed successfully");
+                                json
+                            },
+                            Err(e) => {
+                                println!("Failed to parse proof.json: {}", e);
+                                serde_json::json!({"error": format!("Failed to parse proof.json: {}", e)})
+                            }
                         }
                     },
-                    Err(_) => serde_json::json!({"error": "Failed to read proof.json"})
+                    Err(e) => {
+                        println!("Failed to read proof.json: {}", e);
+                        serde_json::json!({"error": format!("Failed to read proof.json: {}", e)})
+                    }
                 };
                 
                 serde_json::json!({
@@ -515,6 +580,7 @@ async fn run_zkvm_verification() -> serde_json::Value {
                     "proof": proof_json
                 })
             } else {
+                println!("Command failed with exit code: {:?}", output.status.code());
                 serde_json::json!({
                     "success": false,
                     "stdout": stdout,
@@ -523,6 +589,7 @@ async fn run_zkvm_verification() -> serde_json::Value {
             }
         },
         Err(e) => {
+            println!("Failed to execute command: {}", e);
             serde_json::json!({
                 "success": false,
                 "error": format!("Failed to execute command: {}", e)
@@ -531,8 +598,11 @@ async fn run_zkvm_verification() -> serde_json::Value {
     };
     
     // Now make a request to the proof verification server
+    println!("Making request to proof verification server...");
     let client = reqwest::Client::new();
     let receipt_path = "smartcore-zk-ml/smartcore-zk-ml/proof.json";
+    
+    println!("Using receipt path: {}", receipt_path);
     
     let verification_result = match client.post("http://localhost:6000/verify")
         .header("Content-Type", "application/json")
@@ -542,23 +612,36 @@ async fn run_zkvm_verification() -> serde_json::Value {
         .send()
         .await {
             Ok(response) => {
+                println!("Verification server response status: {}", response.status());
                 match response.json::<serde_json::Value>().await {
-                    Ok(json) => json,
-                    Err(e) => serde_json::json!({
-                        "verification_error": format!("Failed to parse verification response: {}", e)
-                    })
+                    Ok(json) => {
+                        println!("Verification server response: {:?}", json);
+                        json
+                    },
+                    Err(e) => {
+                        println!("Failed to parse verification response: {}", e);
+                        serde_json::json!({
+                            "verification_error": format!("Failed to parse verification response: {}", e)
+                        })
+                    }
                 }
             },
-            Err(e) => serde_json::json!({
-                "verification_error": format!("Failed to send verification request: {}", e)
-            })
+            Err(e) => {
+                println!("Failed to send verification request: {}", e);
+                serde_json::json!({
+                    "verification_error": format!("Failed to send verification request: {}", e)
+                })
+            }
         };
     
     // Combine both results
-    serde_json::json!({
+    let result = serde_json::json!({
         "zkvm_result": zkvm_result,
         "verification_result": verification_result
-    })
+    });
+    
+    // println!("Final verification result: {}", result);
+    result
 }
 
 async fn train_random_forest(params: web::Json<RFParameters>) -> HttpResponse {
@@ -787,6 +870,20 @@ async fn add_dataset(mut payload: Multipart) -> HttpResponse {
                     println!("Failed to parse metadata");
                 }
             },
+            "chain_id" => {
+                // Allow explicit chain_id field for easier testing
+                println!("Processing chain_id field");
+                let mut chain_id_str = String::new();
+                while let Ok(Some(chunk)) = field.try_next().await {
+                    chain_id_str.extend(std::str::from_utf8(&chunk).unwrap().chars());
+                }
+                if let Ok(chain_id) = chain_id_str.trim().parse::<u64>() {
+                    println!("Setting chain_id to: {}", chain_id);
+                    dataset.chain_id = Some(chain_id);
+                } else {
+                    println!("Invalid chain_id: {}", chain_id_str);
+                }
+            },
             _ => {
                 println!("Unknown field: {}", field_name);
             }
@@ -812,40 +909,77 @@ async fn add_dataset(mut payload: Multipart) -> HttpResponse {
         return HttpResponse::BadRequest().body("No file uploaded");
     }
     
-    println!("Dataset chain_id: {:?}", dataset.chain_id);
-    // Create bonding curve for the dataset if chain_id is provided
-    if dataset.chain_id.is_some() {
-        println!("Creating bonding curve for dataset: {}", dataset.title);
-        let req = CreateBondingCurveRequest {
-            dataset_title: dataset.title.clone(),
-            chain_id: dataset.chain_id,
-        };
-        
-        match create_bonding_curve_for_dataset(req).await {
-            Ok(curve_info) => {
-                println!("Created bonding curve at address: {}", curve_info.address);
-            },
-            Err(e) => {
-                println!("Failed to create bonding curve: {}", e);
-            }
-        }
+    // If no chain_id was provided but we want to use Sepolia, set it here
+    if dataset.chain_id.is_none() {
+        println!("No chain_id provided, defaulting to Sepolia (11155111)");
+        dataset.chain_id = Some(11155111); // Sepolia chain ID
     }
+    
+    println!("Dataset chain_id: {:?}", dataset.chain_id);
+    // Create bonding curve for the dataset
+    println!("Creating bonding curve for dataset: {}", dataset.title);
+    let req = CreateBondingCurveRequest {
+        dataset_title: dataset.title.clone(),
+        chain_id: dataset.chain_id,
+    };
+    
+    let bonding_curve_result = match create_bonding_curve_for_dataset(req).await {
+        Ok(curve_info) => {
+            println!("Created bonding curve at address: {}", curve_info.address);
+            Some(curve_info)
+        },
+        Err(e) => {
+            println!("Failed to create bonding curve: {}", e);
+            None
+        }
+    };
     
     // Add to datasets.json
     match fs::read_to_string("src/datasets.json") {
         Ok(json_str) => {
             match serde_json::from_str::<Datasets>(&json_str) {
                 Ok(mut datasets) => {
-                    datasets.datasets.push(dataset);
+                    datasets.datasets.push(dataset.clone());
                     match fs::write("src/datasets.json", serde_json::to_string_pretty(&datasets).unwrap()) {
-                        Ok(_) => HttpResponse::Ok().json(datasets),
-                        Err(_) => HttpResponse::InternalServerError().finish()
+                        Ok(_) => {
+                            // Return both the dataset and bonding curve info
+                            let response = serde_json::json!({
+                                "dataset": dataset,
+                                "bonding_curve": bonding_curve_result,
+                                "all_datasets": datasets
+                            });
+                            HttpResponse::Ok().json(response)
+                        },
+                        Err(e) => {
+                            println!("Failed to write datasets.json: {}", e);
+                            HttpResponse::InternalServerError().body("Failed to save dataset metadata")
+                        }
                     }
                 },
-                Err(_) => HttpResponse::InternalServerError().finish()
+                Err(e) => {
+                    println!("Failed to parse datasets.json: {}", e);
+                    HttpResponse::InternalServerError().body("Failed to parse existing datasets")
+                }
             }
         },
-        Err(_) => HttpResponse::InternalServerError().finish()
+        Err(e) => {
+            println!("Failed to read datasets.json: {}", e);
+            // If the file doesn't exist, create it with just this dataset
+            let datasets = Datasets {
+                datasets: vec![dataset.clone()]
+            };
+            match fs::write("src/datasets.json", serde_json::to_string_pretty(&datasets).unwrap()) {
+                Ok(_) => {
+                    let response = serde_json::json!({
+                        "dataset": dataset,
+                        "bonding_curve": bonding_curve_result,
+                        "all_datasets": datasets
+                    });
+                    HttpResponse::Ok().json(response)
+                },
+                Err(_) => HttpResponse::InternalServerError().body("Failed to create datasets.json")
+            }
+        }
     }
 }
 

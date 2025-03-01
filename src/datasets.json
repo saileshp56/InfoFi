@@ -34,17 +34,6 @@
       "chain_id": null
     },
     {
-      "title": "Iris Dataset",
-      "description": "150 samples of iris flowers with 4 features for species classification",
-      "size": "0.2MB",
-      "format": "CSV",
-      "categories": [
-        "Classification",
-        "Botany"
-      ],
-      "chain_id": null
-    },
-    {
       "title": "Wallstreet Stocks",
       "description": "LOTS OF STUFF YEAH",
       "size": "0.00MB",
@@ -53,6 +42,17 @@
         "Classification"
       ],
       "chain_id": 1315
+    },
+    {
+      "title": "Iris Dataset",
+      "description": "150 samples of iris flowers with 4 features for species classification",
+      "size": "0.00MB",
+      "format": "CSV",
+      "categories": [
+        "Flowers",
+        "Classification"
+      ],
+      "chain_id": 11155111
     }
   ]
 }

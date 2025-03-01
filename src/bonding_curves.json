@@ -1,10 +1,10 @@
 {
   "curves": {
     "Iris Dataset": {
-      "address": "0x13c44aa3377246f05546f9e3b0104792f944d81b",
+      "address": "0xa5ac22b873b9a202dd7cd28879d04a406b42cfaa",
       "name": "Iris Dataset Token",
-      "symbol": "IRIed5",
-      "chain_id": 1315
+      "symbol": "IRIee2",
+      "chain_id": 11155111
     },
     "Wallstreet Stocks": {
       "address": "0xd8dd2776058e680d8fd73e4d004d838f36aada62",

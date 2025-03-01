@@ -23,6 +23,7 @@ hedera = "0.13.0"
 time = "0.3.37"
 reqwest = { version = "0.11", features = ["json"] }
 base64 = "0.13"
+ndarray = "0.15.0"
 
 
 [[bin]]

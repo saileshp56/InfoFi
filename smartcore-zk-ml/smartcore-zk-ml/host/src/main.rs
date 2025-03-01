@@ -126,6 +126,7 @@ fn main() {
     if let Some(labels) = true_labels {
         let mut correct = 0;
         for (pred, true_label) in output.predictions.iter().zip(labels.iter()) {
+            
             if pred == true_label {
                 correct += 1;
             }

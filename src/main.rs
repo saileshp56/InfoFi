@@ -170,8 +170,6 @@ struct MLParameters {
     dataset_title: String,
     accuracy: f64,
     wallet_address: String,
-    
-    
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -216,7 +214,65 @@ struct CreateBondingCurveRequest {
     chain_id: Option<u64>,
 }
 
-async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
+async fn train_decision_tree(mut payload: Multipart) -> HttpResponse {
+    // Create validation directory if it doesn't exist
+    std::fs::create_dir_all("validation").unwrap_or_default();
+    
+    let mut params = None;
+    let mut validation_data: Option<Vec<u8>> = None;
+    
+    // Extract all fields from the multipart form
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let content_disposition = field.content_disposition();
+        let field_name = content_disposition.get_name().unwrap_or("");
+        
+        match field_name {
+            "params" => {
+                // Extract the JSON parameters
+                let mut json_data = Vec::new();
+                while let Ok(Some(chunk)) = field.try_next().await {
+                    json_data.extend_from_slice(&chunk);
+                }
+                
+                if let Ok(json_str) = std::str::from_utf8(&json_data) {
+                    if let Ok(parsed_params) = serde_json::from_str::<MLParameters>(json_str) {
+                        params = Some(parsed_params);
+                    } else {
+                        return HttpResponse::BadRequest().body("Invalid parameters format");
+                    }
+                }
+            },
+            "validation_dataset" => {
+                // Extract the validation dataset file
+                let mut data = Vec::new();
+                while let Ok(Some(chunk)) = field.try_next().await {
+                    data.extend_from_slice(&chunk);
+                }
+                validation_data = Some(data);
+            },
+            _ => {
+                // Ignore unknown fields
+            }
+        }
+    }
+    
+    // Check if we have all required data
+    let params = match params {
+        Some(p) => p,
+        None => return HttpResponse::BadRequest().body("Missing parameters")
+    };
+    
+    let validation_data = match validation_data {
+        Some(data) => data,
+        None => return HttpResponse::BadRequest().body("Missing validation dataset")
+    };
+    
+    // Save the validation dataset
+    let validation_path = format!("validation/{}_validation.csv", params.dataset_title);
+    if let Err(e) = std::fs::write(&validation_path, &validation_data) {
+        return HttpResponse::InternalServerError().body(format!("Failed to save validation dataset: {}", e));
+    }
+    
     // Create model parameters
     let model_params = DecisionTreeClassifierParameters {
         criterion: if params.use_entropy { 
@@ -243,13 +299,19 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
             std::fs::create_dir_all("res/ml-model").unwrap_or_default();
             std::fs::create_dir_all("res/input-data").unwrap_or_default();
             
-            // Load the dataset again to save it
+            // Load the training dataset
             let input = readers::csv::matrix_from_csv_source::<f64, Vec<_>, DenseMatrix<_>>(
                 File::open(&dataset_path).unwrap(),
                 readers::csv::CSVDefinition::default()
             ).unwrap();
             
-            // Get the labels
+            // Load the validation dataset
+            let validation_input = readers::csv::matrix_from_csv_source::<f64, Vec<_>, DenseMatrix<_>>(
+                File::open(&validation_path).unwrap(),
+                readers::csv::CSVDefinition::default()
+            ).unwrap();
+            
+            // Get the labels from training data
             let df = CsvReader::from_path(&dataset_path).unwrap()
                 .has_header(true)
                 .finish().unwrap();
@@ -258,6 +320,21 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
             let target_column = columns.last().unwrap();
             
             let y_u32s: Vec<u32> = df.column(target_column).unwrap()
+                .cast(&DataType::Int64).unwrap()
+                .i64().unwrap()
+                .into_no_null_iter()
+                .map(|x| x as u32)
+                .collect();
+            
+            // Get the validation labels
+            let validation_df = CsvReader::from_path(&validation_path).unwrap()
+                .has_header(true)
+                .finish().unwrap();
+            
+            let validation_columns = validation_df.get_column_names();
+            let validation_target_column = validation_columns.last().unwrap();
+            
+            let validation_y_u32s: Vec<u32> = validation_df.column(validation_target_column).unwrap()
                 .cast(&DataType::Int64).unwrap()
                 .i64().unwrap()
                 .into_no_null_iter()
@@ -274,21 +351,18 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
             let mut f = File::create("res/ml-model/tree_model_bytes.bin").unwrap();
             f.write_all(&model_bytes).unwrap();
             
-            let data_bytes = rmp_serde::to_vec(&input).unwrap();
+            // Use validation data instead of training data for zkVM verification
+            let validation_data_bytes = rmp_serde::to_vec(&validation_input).unwrap();
             let mut f1: File = File::create("res/input-data/tree_model_data_bytes.bin").unwrap();
-            f1.write_all(&data_bytes).unwrap();
+            f1.write_all(&validation_data_bytes).unwrap();
             
-            let labels_bytes = rmp_serde::to_vec(&y_u32s).unwrap();
+            // Use validation labels instead of training labels
+            let validation_labels_bytes = rmp_serde::to_vec(&validation_y_u32s).unwrap();
             let mut f2 = File::create("res/input-data/tree_model_labels.bin").unwrap();
-            f2.write_all(&labels_bytes).unwrap();
+            f2.write_all(&validation_labels_bytes).unwrap();
             
             // Comment out for brevity!
             let output = run_zkvm_verification().await;
-            // let output = serde_json::json!({
-            //     "zkvm_result": {
-            //         "success": true
-            //     }
-            // });
             
             let model_bytes = fs::read("res/ml-model/tree_model_bytes.bin").unwrap_or_default();
             let model_base64 = base64::encode(&model_bytes);
@@ -302,6 +376,7 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
                     "wallet_address": params.wallet_address,
                     "verification_result": output,
                     "model": model_base64,
+                    "validation_dataset": validation_path,
                     "bonding_curve_result": {
                         "status": "skipped",
                         "message": "Verification failed, skipping bonding curve interaction"
@@ -357,7 +432,8 @@ async fn train_decision_tree(params: web::Json<MLParameters>) -> HttpResponse {
                 "accuracy_param": params.accuracy,
                 "wallet_address": params.wallet_address,
                 "verification_result": output,
-                "model": model_base64
+                "model": model_base64,
+                "validation_dataset": validation_path
             }))
         },
         Err(e) => {
@@ -552,7 +628,7 @@ async fn run_zkvm_verification() -> serde_json::Value {
     let mut command = std::process::Command::new("cargo");
     let command = command
         .current_dir(&zkvm_dir)
-        .env("RISC0_DEV_MODE", "0")  // Disable dev mode
+        .env("RISC0_DEV_MODE", "0")  // Disable dev mode with 0
         .arg("run")
         .arg("--release");
     

@@ -75,6 +75,17 @@
         "Classification"
       ],
       "chain_id": 11155111
+    },
+    {
+      "title": "ZKSync Flowers",
+      "description": "Flowers found on planet ZKSync",
+      "size": "0.00MB",
+      "format": "CSV",
+      "categories": [
+        "Flowers",
+        "Classification"
+      ],
+      "chain_id": 300
     }
   ]
 }

@@ -43,7 +43,7 @@ lazy_static::lazy_static! {
         
         let mut m = std::collections::HashMap::new();
         m.insert(296, env::var("RPC_URL_HEDERA").unwrap_or_default());
-        m.insert(48899, env::var("RPC_URL_ZIRCUIT").unwrap_or_default());
+        m.insert(48898, env::var("RPC_URL_ZIRCUIT").unwrap_or_default());
         m.insert(300, env::var("RPC_URL_ZKSYNC").unwrap_or_default());
         m.insert(11155111, env::var("RPC_URL_SEPOLIA").unwrap_or_default());
         m.insert(1315, env::var("RPC_URL_AENEID").unwrap_or_default());
@@ -87,7 +87,7 @@ lazy_static::lazy_static! {
         
         if let Ok(addr) = env::var("FACTORY_ADDRESS_ZIRCUIT") {
             if let Ok(parsed) = Address::from_str(&addr) {
-                m.insert(48899, parsed);
+                m.insert(48898, parsed);
             }
         }
         
@@ -130,7 +130,7 @@ lazy_static::lazy_static! {
         
         if let Ok(addr) = env::var("PAYMENT_TOKENS_ZIRCUIT") {
             if let Ok(parsed) = Address::from_str(&addr) {
-                m.insert(48899, parsed);
+                m.insert(48898, parsed);
             }
         }
         
@@ -361,8 +361,17 @@ async fn train_decision_tree(mut payload: Multipart) -> HttpResponse {
             let mut f2 = File::create("res/input-data/tree_model_labels.bin").unwrap();
             f2.write_all(&validation_labels_bytes).unwrap();
             
-            // Comment out for brevity!
-            let output = run_zkvm_verification().await;
+            // Save the expected accuracy to a file for zkVM verification
+            let accuracy_path = "res/input-data/expected_accuracy.txt";
+            if let Err(e) = fs::write(accuracy_path, params.accuracy.to_string()) {
+                println!("Warning: Failed to write expected accuracy to file: {}", e);
+            } else {
+                println!("Saved expected accuracy {} to {}", params.accuracy, accuracy_path);
+            }
+            
+            // Clone the wallet address before passing it to run_zkvm_verification
+            let wallet_address = params.wallet_address.clone();
+            let output = run_zkvm_verification(wallet_address).await;
             
             let model_bytes = fs::read("res/ml-model/tree_model_bytes.bin").unwrap_or_default();
             let model_base64 = base64::encode(&model_bytes);
@@ -396,7 +405,7 @@ async fn train_decision_tree(mut payload: Multipart) -> HttpResponse {
                         println!("Bonding curve address: {:?} and chain id: {}", bonding_curve_address, chain_id);
                         if let Some(address) = bonding_curve_address {
                             // Interact with the bonding curve
-                            println!("spolav wtf {} {}", address, chain_id);
+                            println!("spolav {} {}", address, chain_id);
                             match interact_with_bonding_curve(address, chain_id, 100.0).await {
                                 Ok(result) => Some(result),
                                 Err(e) => Some(serde_json::json!({
@@ -593,7 +602,7 @@ async fn interact_with_bonding_curve(curve_address: String, chain_id: u64, token
 }
 
 // Function to run the RISC Zero zkVM verification
-async fn run_zkvm_verification() -> serde_json::Value {
+async fn run_zkvm_verification(address: String) -> serde_json::Value {
     println!("Starting zkVM verification process...");
     
     // Get the current directory
@@ -681,12 +690,27 @@ async fn run_zkvm_verification() -> serde_json::Value {
                     "proof": proof_json
                 })
             } else {
-                println!("Command failed with exit code: {:?}", output.status.code());
-                serde_json::json!({
-                    "success": false,
-                    "stdout": stdout,
-                    "stderr": stderr
-                })
+                // Check for specific accuracy error message
+                if stdout.contains("ERROR: Model accuracy") && stdout.contains("below the expected threshold") {
+                    println!("Verification failed: Model accuracy below threshold");
+                    return serde_json::json!({
+                        "zkvm_result": {
+                            "success": false,
+                            "error": "accuracy_below_threshold",
+                            "stdout": stdout,
+                            "stderr": stderr
+                        },
+                        "verification_result": {}
+                    });
+                } else {
+                    println!("Command failed with exit code: {:?}", output.status.code());
+                    serde_json::json!({
+                        "success": false,
+                        "error": "verification_failed",
+                        "stdout": stdout,
+                        "stderr": stderr
+                    })
+                }
             }
         },
         Err(e) => {
@@ -708,6 +732,7 @@ async fn run_zkvm_verification() -> serde_json::Value {
     let verification_result = match client.post("http://localhost:6000/verify")
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
+            "address": address,
             "receiptPath": receipt_path
         }))
         .send()
@@ -784,7 +809,6 @@ async fn get_datasets() -> HttpResponse {
     // Combine dataset info with bonding curve info
     let datasets_with_curves = datasets_result.datasets.into_iter().map(|dataset| {
         let bonding_curve = bonding_curves.curves.get(&dataset.title).cloned();
-        println!("We're returning {:?}", bonding_curve);
         DatasetWithCurve {
             dataset,
             bonding_curve,
@@ -883,6 +907,8 @@ async fn add_dataset(mut payload: Multipart) -> HttpResponse {
         dataset_title: dataset.title.clone(),
         chain_id: dataset.chain_id,
     };
+
+    println!("Creating bonding curve for chainid spolav: {}", dataset.chain_id.unwrap());
     
     let bonding_curve_result = match create_bonding_curve_for_dataset(req, dataset.chain_id.unwrap()).await {
         Ok(curve_info) => {

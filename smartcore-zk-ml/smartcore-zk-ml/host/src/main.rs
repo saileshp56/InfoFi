@@ -11,11 +11,13 @@ use hex;
 struct InferenceInput {
     model_bytes: Vec<u8>,
     test_data: DenseMatrix<f64>,
+    expected_accuracy: f64,
 }
 
 #[derive(Serialize, Deserialize)]
 struct InferenceOutput {
     predictions: Vec<u32>,
+    actual_accuracy: f64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -57,10 +59,21 @@ fn main() {
         }
     };
 
+    // Read the expected accuracy from a file
+    let expected_accuracy = match fs::read_to_string("../../res/input-data/expected_accuracy.txt") {
+        Ok(content) => content.trim().parse::<f64>().unwrap_or(0.5),
+        Err(_) => {
+            println!("Warning: Expected accuracy file not found. Using default of 50%.");
+            0.5
+        }
+    };
+    println!("Expected accuracy: {:.2}%", expected_accuracy * 100.0);
+
     // Create the input for the guest
     let input = InferenceInput {
         model_bytes,
         test_data,
+        expected_accuracy,
     };
 
     // Set up the executor environment with our input
@@ -121,22 +134,27 @@ fn main() {
     // Print the predictions
     println!("Predictions (first 5): {:?}", &output.predictions[..5.min(output.predictions.len())]);
     println!("Total predictions: {}", output.predictions.len());
+    println!("Actual accuracy: {:.2}%", output.actual_accuracy * 100.0);
 
     // Calculate accuracy if labels are available
     if let Some(labels) = true_labels {
         let mut correct = 0;
         for (pred, true_label) in output.predictions.iter().zip(labels.iter()) {
-            
             if pred == true_label {
                 correct += 1;
             }
         }
         let accuracy = correct as f64 / output.predictions.len() as f64;
-        println!("Accuracy: {:.2}%", accuracy * 100.0);
+        println!("Host-calculated accuracy: {:.2}%", accuracy * 100.0);
         
-        // Verify accuracy is >= 50%
-        assert!(accuracy >= 0.5, "Accuracy is below 50%");
-        println!("Accuracy verification passed: >= 50%");
+        // Verify accuracy meets the expected threshold
+        if accuracy < expected_accuracy {
+            println!("ERROR: Model accuracy {:.2}% is below the expected threshold of {:.2}%", 
+                     accuracy * 100.0, expected_accuracy * 100.0);
+            std::process::exit(1);
+        }
+        
+        println!("Accuracy verification passed: >= {:.2}%", expected_accuracy * 100.0);
     }
 }
 

@@ -1,12 +1,12 @@
 {
-  "root": "0x6dff448299d60c2c11e24a9d63847b1cb833c7ab784f1e68c71f34f6d6b48c72",
+  "root": "0xecff6b4e9fde916323f96a7b1a907faf66e13f5bfc11b034dcbd48c204f1b1ab",
   "proof": [
-    "0xacf8dce81f87e46a64188bf0b3e0764b391f114b592c798a1300f285afec8410",
-    "0xaaf425246fd5bb1cafff86fd19d93fe19e3a51d39ea66fa009c6eece26169ea8",
-    "0xffde3a9f0d039e4197ce43450e5acf632a0c717d5b0011862418385e5c209780"
+    "0x3b8f5ad90705be1530d6126aa7c43afa5ee5d4176d06de46956e32d855b2770a",
+    "0x09c56cf6d9b89ab938af009061aa785f7c8f5619445fd3f5608ca1a17f7c0fc3",
+    "0xfccbdd66cee1f80bfd8daadb49aea89ee6654bdfa5147dda39030cf10f455e6b"
   ],
-  "numberOfLeaves": 6,
-  "leafIndex": 2,
-  "leaf": "0x80d15976d36c66519cf5f54aba98170b0760c484ae168232393132caf2fc4919",
-  "attestationId": 58593
+  "numberOfLeaves": 5,
+  "leafIndex": 1,
+  "leaf": "0x528f4415dd86ca636d90ddc883331bf25495d6b855083936e92efd8e545236d2",
+  "attestationId": 58689
 }

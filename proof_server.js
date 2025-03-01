@@ -151,7 +151,7 @@ app.post('/verify', async (req, res) => {
     
     // If verification was successful, publish the result hash to Hedera
     if (result) {
-        console.log("YES HI SUCCESSFUL VERIFICATION")
+        console.log("SUCCESSFUL VERIFICATION")
       try {
         if (!hederaConfig) {
           console.error('Hedera client not properly configured');
@@ -167,7 +167,8 @@ app.post('/verify', async (req, res) => {
           const message = JSON.stringify({
             resultHash: `0x${resultHash}`,
             verificationResult: result,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            address: req.body.address,
           });
           
           console.log(`Publishing verification result to Hedera topic ${topicId}`);

@@ -1,16 +1,22 @@
 {
   "curves": {
+    "Wallstreet Stocks": {
+      "address": "0xd8dd2776058e680d8fd73e4d004d838f36aada62",
+      "name": "Wallstreet Stocks Token",
+      "symbol": "WAL2c2",
+      "chain_id": 1315
+    },
     "Iris Dataset": {
       "address": "0xa5ac22b873b9a202dd7cd28879d04a406b42cfaa",
       "name": "Iris Dataset Token",
       "symbol": "IRIee2",
       "chain_id": 11155111
     },
-    "Wallstreet Stocks": {
-      "address": "0xd8dd2776058e680d8fd73e4d004d838f36aada62",
-      "name": "Wallstreet Stocks Token",
-      "symbol": "WAL2c2",
-      "chain_id": 1315
+    "Pillow Cases": {
+      "address": "0x08aac5b3aed53303c12f0a1ee083f0696bd44fe7",
+      "name": "Pillow Cases Token",
+      "symbol": "PILee3",
+      "chain_id": 11155111
     },
     "ERC20 Logos": {
       "address": "0xa7330808a0517766fdea3d4b1f8029495bad5e37",
@@ -18,11 +24,11 @@
       "symbol": "ERCaeb",
       "chain_id": 296
     },
-    "Pillow Cases": {
-      "address": "0x08aac5b3aed53303c12f0a1ee083f0696bd44fe7",
-      "name": "Pillow Cases Token",
-      "symbol": "PILee3",
-      "chain_id": 11155111
+    "ZKSync Flowers": {
+      "address": "0x73463f335de2bc43402b9ca835a24567fe8bbe71",
+      "name": "ZKSync Flowers Token",
+      "symbol": "ZKS8a8",
+      "chain_id": 300
     }
   }
 }

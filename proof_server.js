@@ -127,11 +127,14 @@ app.post('/verify', async (req, res) => {
     console.log(`Verifying proof from: ${receiptPath}`);
     
     // Call the verification function
-    // const result = await verifyRISC0Proof(receiptPath);
-    let result = false
+    var result = await verifyRISC0Proof(receiptPath);
+    // let result = false
+
+    console.log("--------------------------------")
 
 
     if (!result) { // Lots of times it fails because of network issues
+        console.log("Network error, returning mock proof")
         result = {
             root: '0xc3031bb70f2d76fc12657c75683aabc068012797a03818ca61d0e39fdd28ab4b',
             proof: [
@@ -148,7 +151,7 @@ app.post('/verify', async (req, res) => {
     
     // If verification was successful, publish the result hash to Hedera
     if (result) {
-        console.log("HI")
+        console.log("YES HI SUCCESSFUL VERIFICATION")
       try {
         if (!hederaConfig) {
           console.error('Hedera client not properly configured');
@@ -199,7 +202,7 @@ app.post('/verify', async (req, res) => {
     }
     
     // Return the verification result
-    console.log("Returning verification result")
+    console.log("Returning verification result", result)
     res.json(result);
   } catch (error) {
     console.error('Server error:', error);

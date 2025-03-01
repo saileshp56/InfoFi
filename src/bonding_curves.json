@@ -11,6 +11,18 @@
       "name": "Wallstreet Stocks Token",
       "symbol": "WAL2c2",
       "chain_id": 1315
+    },
+    "ERC20 Logos": {
+      "address": "0xa7330808a0517766fdea3d4b1f8029495bad5e37",
+      "name": "ERC20 Logos Token",
+      "symbol": "ERCaeb",
+      "chain_id": 296
+    },
+    "Pillow Cases": {
+      "address": "0x08aac5b3aed53303c12f0a1ee083f0696bd44fe7",
+      "name": "Pillow Cases Token",
+      "symbol": "PILee3",
+      "chain_id": 11155111
     }
   }
 }

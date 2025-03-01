@@ -53,6 +53,28 @@
         "Classification"
       ],
       "chain_id": 11155111
+    },
+    {
+      "title": "ERC20 Logos",
+      "description": "A dataset of ERC20 attributes and logos",
+      "size": "0.00MB",
+      "format": "CSV",
+      "categories": [
+        "EVM",
+        "Classification"
+      ],
+      "chain_id": 296
+    },
+    {
+      "title": "Pillow Cases",
+      "description": "A dataset full of information for classifying pillow cases",
+      "size": "0.00MB",
+      "format": "CSV",
+      "categories": [
+        "Pillows",
+        "Classification"
+      ],
+      "chain_id": 11155111
     }
   ]
 }

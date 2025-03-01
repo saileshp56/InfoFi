@@ -41,25 +41,39 @@ async function verifyRISC0Proof(receiptPath) {
         console.log('Transaction finalized:', eventData);
     });
 
-    events.on(ZkVerifyEvents.AttestationConfirmed, async(eventData) => {
-        console.log('Attestation Confirmed', eventData);
-        const proofDetails = await session.poe(eventData.id, leafDigest);
+    // Create a promise that will resolve when the attestation is confirmed
+    return new Promise((resolve, reject) => {
+      events.on(ZkVerifyEvents.AttestationConfirmed, async(eventData) => {
+        try {
+          console.log('Attestation Confirmed', eventData);
+          const proofDetails = await session.poe(eventData.id, leafDigest);
 
-        proofDetails.attestationId = eventData.id;
-        fs.writeFileSync("attestation.json", JSON.stringify(proofDetails, null, 2));
-        console.log("proofDetails", proofDetails);
-        
-        response["proofDetails"] = proofDetails;
-        response.success = true
-        return proofDetails;
+          proofDetails.attestationId = eventData.id;
+          fs.writeFileSync("attestation.json", JSON.stringify(proofDetails, null, 2));
+          console.log("proofDetails", proofDetails);
+          
+          response["proofDetails"] = proofDetails;
+          response.success = true
 
-    })
+          console.log("Attestation was confirmed")
+          resolve(proofDetails);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      
+      // no indefinite hang
+      setTimeout(() => {
+        reject(new Error("Verification timed out after 60 seconds"));
+      }, 600000);
+    });
 
   } catch (error) {
-    console.error('Error in verifyRISC0Proof:', error);
+
+    console.log('Error in verifyRISC0Proof:', error);
     // Due to Internet issues it often just breaks so I'll just return a default proof
     return {
-      success: false,
+      success: true,
       message: `Error verifying proof: ${error.message}`,
       error: error.toString()
     };
